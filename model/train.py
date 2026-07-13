@@ -13,7 +13,7 @@ from sklearn.model_selection import RandomizedSearchCV
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_DIR = Path(__file__).resolve().parent
-DATA_PATH = ROOT_DIR / "data" / "processed" / "orig_data.parquet"
+DATA_PATH = ROOT_DIR / "data" / "processed" / "orig_data_with_listeners.parquet"
 ARTIFACT_PATH = Path(__file__).resolve().parent / "artifacts" / "popularity_pipeline.joblib"
 
 TARGET = "popularity"
@@ -21,7 +21,7 @@ from model.features import NUMERIC_FEATURES, CATEGORICAL_FEATURES
 
 GROUP_COLUMN = "primary_artist"
 
-CONTEXT_NUMERIC_FEATURES = ["artist_fame_loo"]
+CONTEXT_NUMERIC_FEATURES = ["artists_listeners"]
 CONTEXT_CATEGORICAL_FEATURES = ["track_genre"]
 CONTEXT_FEATURES = CONTEXT_NUMERIC_FEATURES + CONTEXT_CATEGORICAL_FEATURES
 
@@ -166,7 +166,7 @@ def make_oof_predictions(
 
     return oof_predictions, fold_models
 
-def train_residual_models(
+def train_residual_lgmb_models(
     df=None,
     context_params=None,
     audio_params=None,

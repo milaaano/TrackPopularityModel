@@ -6,6 +6,10 @@ from sklearn.compose import ColumnTransformer
 from lightgbm import LGBMRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, r2_score
+# Spearman: CLAUDE.md judges Model B on *ranking* quality (the product ranks
+# songs by promise), not absolute error. MAE 7.46 vs 7.68 says almost nothing
+# about whether we rank songs correctly, so we add rank correlation to eval.
+from scipy.stats import spearmanr
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -166,7 +170,36 @@ def make_oof_predictions(
 
     return oof_predictions, fold_models
 
-def train_residual_lgmb_models(
+# --- NEW: audio-ceiling diagnostic ---------------------------------------
+# Question this answers: do the 10 Spotify audio features carry ANY popularity
+# signal *before* we remove fame? This is the ceiling for the whole residual
+# approach.
+#   - If audio-alone R2 here >> the audio *residual* R2 (0.026), fame is masking
+#     real audio signal -> the residual trick is justified, keep pushing on it.
+#   - If audio-alone R2 is ALSO tiny (~0.03), the features themselves are weak;
+#     no residual cleverness fixes that. The lever becomes richer audio features
+#     (Stage 6: MFCCs, spectral contrast, onset density), not more context.
+# Note: this is an *upper bound* on audio's contribution — it also absorbs any
+# incidental correlation between audio profile and fame/genre, so treat a
+# nonzero result as "at most this much," not "this much is intrinsic."
+def evaluate_audio_ceiling(train_df, test_df, y_train, y_test, audio_params=None):
+    audio_params = audio_params or DEFAULT_LGBM_PARAMS
+
+    ceiling_model = build_LGBM(
+        audio_params,
+        nfeatures=AUDIO_NUMERIC_FEATURES,
+        cfeatures=AUDIO_CATEGORICAL_FEATURES,
+    )
+    # Fit audio features directly on RAW popularity (no fame removal).
+    ceiling_model.fit(train_df[AUDIO_FEATURES], y_train)
+    ceiling_preds = ceiling_model.predict(test_df[AUDIO_FEATURES])
+
+    print("Audio-alone (raw popularity) R2:", r2_score(y_test, ceiling_preds))
+    print("Audio-alone (raw popularity) Spearman:", spearmanr(y_test, ceiling_preds)[0])
+
+    return ceiling_model
+
+def train_residual_models(
     df=None,
     context_params=None,
     audio_params=None,
@@ -243,6 +276,28 @@ def train_residual_lgmb_models(
         test_residual,
         audio_adjustments,
     ))
+    # NEW: the metric Model B is actually graded on. Rank-correlate the audio
+    # model's residual predictions against the true residual. CLAUDE.md floor is
+    # Spearman > 0.15 (minimum) / > 0.25 (good). This is the number to watch.
+    print("Audio residual Spearman:", spearmanr(test_residual, audio_adjustments)[0])
+
+    # NEW: shuffled-feature control = the noise floor. Retrain the SAME audio
+    # model on a permuted residual target, so the features have provably nothing
+    # to predict. With group splits + a finite test set, "no signal" is not
+    # exactly zero, so this tells us what zero looks like. Our real audio model
+    # only carries signal if it clearly BEATS these two numbers.
+    shuffled_residual = train_df["popularity_residual"].sample(
+        frac=1.0, random_state=667
+    ).to_numpy()
+    shuffled_audio_model = build_LGBM(
+        audio_params,
+        nfeatures=AUDIO_NUMERIC_FEATURES,
+        cfeatures=AUDIO_CATEGORICAL_FEATURES,
+    )
+    shuffled_audio_model.fit(train_df[AUDIO_FEATURES], shuffled_residual)
+    shuffled_adjustments = shuffled_audio_model.predict(test_df[AUDIO_FEATURES])
+    print("Shuffled-control residual R2:", r2_score(test_residual, shuffled_adjustments))
+    print("Shuffled-control residual Spearman:", spearmanr(test_residual, shuffled_adjustments)[0])
 
     context_test_preds = np.clip(context_test_preds, 0, 100)
 
@@ -250,6 +305,11 @@ def train_residual_lgmb_models(
     print("Context R2:", r2_score(y_test, context_test_preds))
     print("Final MAE:", mean_absolute_error(y_test, final_preds))
     print("Final R2:", r2_score(y_test, final_preds))
+
+    # NEW: run the audio-ceiling diagnostic on the SAME held-out artists so the
+    # numbers are comparable to the residual metrics above. See the function's
+    # docstring for how to read audio-alone R2 vs audio-residual R2.
+    evaluate_audio_ceiling(train_df, test_df, y_train, y_test, audio_params=audio_params)
 
     artifact_dir = MODEL_DIR / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)

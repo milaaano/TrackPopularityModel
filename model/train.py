@@ -6,11 +6,8 @@ from sklearn.compose import ColumnTransformer
 from lightgbm import LGBMRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, r2_score
-# Spearman: CLAUDE.md judges Model B on *ranking* quality (the product ranks
-# songs by promise), not absolute error. MAE 7.46 vs 7.68 says almost nothing
-# about whether we rank songs correctly, so we add rank correlation to eval.
 from scipy.stats import spearmanr
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import RandomizedSearchCV
@@ -18,31 +15,23 @@ from sklearn.model_selection import RandomizedSearchCV
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_DIR = Path(__file__).resolve().parent
 DATA_PATH = ROOT_DIR / "data" / "processed" / "orig_data_with_listeners.parquet"
+LIBROSA_CACHE = ROOT_DIR / "data" / "audio" / "librosa_features.parquet"
 ARTIFACT_PATH = Path(__file__).resolve().parent / "artifacts" / "popularity_pipeline.joblib"
 
 TARGET = "popularity"
-from model.features import NUMERIC_FEATURES, CATEGORICAL_FEATURES
-
 GROUP_COLUMN = "primary_artist"
 
-CONTEXT_NUMERIC_FEATURES = ["artists_listeners"]
-CONTEXT_CATEGORICAL_FEATURES = ["track_genre"]
-CONTEXT_FEATURES = CONTEXT_NUMERIC_FEATURES + CONTEXT_CATEGORICAL_FEATURES
-
-AUDIO_NUMERIC_FEATURES = [
-    "duration_ms",
-    "danceability",
-    "energy",
-    "loudness",
-    "speechiness",
-    "acousticness",
-    "instrumentalness",
-    "liveness",
-    "valence",
-    "tempo",
-]
-AUDIO_CATEGORICAL_FEATURES = ["key", "mode", "time_signature"]
-AUDIO_FEATURES = AUDIO_NUMERIC_FEATURES + AUDIO_CATEGORICAL_FEATURES
+from model.features import (
+    NUMERIC_FEATURES,
+    CATEGORICAL_FEATURES,
+    CONTEXT_NUMERIC_FEATURES,
+    CONTEXT_CATEGORICAL_FEATURES,
+    CONTEXT_FEATURES,
+    AUDIO_NUMERIC_FEATURES,
+    AUDIO_CATEGORICAL_FEATURES,
+    AUDIO_FEATURES,
+    LIBROSA_FEATURES,
+)
 
 DEFAULT_LGBM_PARAMS = {
     "n_estimators": 300,
@@ -170,150 +159,111 @@ def make_oof_predictions(
 
     return oof_predictions, fold_models
 
-# --- NEW: audio-ceiling diagnostic ---------------------------------------
-# Question this answers: do the 10 Spotify audio features carry ANY popularity
-# signal *before* we remove fame? This is the ceiling for the whole residual
-# approach.
-#   - If audio-alone R2 here >> the audio *residual* R2 (0.026), fame is masking
-#     real audio signal -> the residual trick is justified, keep pushing on it.
-#   - If audio-alone R2 is ALSO tiny (~0.03), the features themselves are weak;
-#     no residual cleverness fixes that. The lever becomes richer audio features
-#     (Stage 6: MFCCs, spectral contrast, onset density), not more context.
-# Note: this is an *upper bound* on audio's contribution — it also absorbs any
-# incidental correlation between audio profile and fame/genre, so treat a
-# nonzero result as "at most this much," not "this much is intrinsic."
-def evaluate_audio_ceiling(train_df, test_df, y_train, y_test, audio_params=None):
-    audio_params = audio_params or DEFAULT_LGBM_PARAMS
+def load_librosa_training_set():
+    """The audio model's training data: downloaded tracks with
+    librosa descriptors, joined to the 66k dataset for popularity + fame + genre +
+    artist. Only tracks we have actually downloaded and extracted appear here. (The context model still trains on the 66k.)
+    """
+    lib = pd.read_parquet(LIBROSA_CACHE)
+    full = pd.read_parquet(DATA_PATH).drop_duplicates("spotify_track_id")
+    df = lib.merge(full, on="spotify_track_id", how="inner")
+    df = df.dropna(
+        subset=[TARGET, GROUP_COLUMN] + CONTEXT_FEATURES + LIBROSA_FEATURES
+    ).reset_index(drop=True)
+    if len(df) < 50:
+        raise ValueError(
+            f"Only {len(df)} librosa rows joined. Either too few tracks are "
+            "downloaded/extracted (Stage 5 — 45 collapsed to fold-means, a few "
+            "thousand is the target), or the cache predates the current "
+            f"{len(LIBROSA_FEATURES)}-feature extractor and every row was dropped "
+            "as incomplete. Re-run the extraction cell in "
+            "notebooks/librosa_features.ipynb."
+        )
+    return df
 
-    ceiling_model = build_LGBM(
-        audio_params,
-        nfeatures=AUDIO_NUMERIC_FEATURES,
-        cfeatures=AUDIO_CATEGORICAL_FEATURES,
-    )
-    # Fit audio features directly on RAW popularity (no fame removal).
-    ceiling_model.fit(train_df[AUDIO_FEATURES], y_train)
-    ceiling_preds = ceiling_model.predict(test_df[AUDIO_FEATURES])
 
-    print("Audio-alone (raw popularity) R2:", r2_score(y_test, ceiling_preds))
-    print("Audio-alone (raw popularity) Spearman:", spearmanr(y_test, ceiling_preds)[0])
+def _report_audio_metrics(residual, audio_oof, shuffled_oof):
+    zero = np.zeros(len(residual))
+    print(f"Zero-residual MAE (baseline): {mean_absolute_error(residual, zero):.4f}")
+    print(f"Audio residual MAE:          {mean_absolute_error(residual, audio_oof):.4f}")
+    print(f"Audio residual R2:           {r2_score(residual, audio_oof):.4f}")
+    spearman = spearmanr(residual, audio_oof)[0]
+    print(f"Audio residual Spearman:     {spearman:.4f}   (floor 0.15 / good 0.25)")
+    print(f"Shuffled-control Spearman:   {spearmanr(residual, shuffled_oof)[0]:.4f}   (noise floor)")
+    if spearman < 0.15:
+        print("  WARNING: below the Stage-3 floor — do NOT ship this as a points model "
+              "(CLAUDE.md Stage 6 gate). Get more/better audio, or serve percentile-only.")
+    return spearman
 
-    return ceiling_model
-
-def train_residual_models(
-    df=None,
-    context_params=None,
-    audio_params=None,
-    n_splits=10,
-    test_size=0.2,
-):
-    df = pd.read_parquet(DATA_PATH) if df is None else df.copy()
+def train_residual_models(context_params=None, audio_params=None, n_splits=10):
     context_params = context_params or DEFAULT_LGBM_PARAMS
     audio_params = audio_params or DEFAULT_LGBM_PARAMS
 
-    required_columns = [TARGET, GROUP_COLUMN] + CONTEXT_FEATURES + AUDIO_FEATURES
-    missing_columns = [
-        column for column in required_columns
-        if column not in df.columns
-    ]
-    if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")
-
-    split = GroupShuffleSplit(
-        n_splits=1,
-        test_size=test_size,
-        random_state=667,
-    )
-    train_idx, test_idx = next(split.split(df, df[TARGET], groups=df[GROUP_COLUMN]))
-
-    train_df = df.iloc[train_idx].copy()
-    test_df = df.iloc[test_idx].copy()
-
-    y_train = train_df[TARGET]
-    y_test = test_df[TARGET]
-
-    context_oof_preds, context_fold_models = make_oof_predictions(
-        train_df[CONTEXT_FEATURES],
-        y_train,
-        train_df[GROUP_COLUMN],
-        best_params=context_params,
-        nfeatures=CONTEXT_NUMERIC_FEATURES,
-        cfeatures=CONTEXT_CATEGORICAL_FEATURES,
-        n_splits=n_splits,
-    )
-
-    train_df["context_oof_pred"] = context_oof_preds
-    train_df["popularity_residual"] = y_train - context_oof_preds
-
+    # ---- Context model: fame + genre -> popularity, on the full 66k ----------
+    full = pd.read_parquet(DATA_PATH)
+    full = full.dropna(subset=[TARGET, GROUP_COLUMN] + CONTEXT_FEATURES).reset_index(drop=True)
+    print(f"Context: {len(full)} rows / {full[GROUP_COLUMN].nunique()} artists")
     context_model = build_LGBM(
         context_params,
         nfeatures=CONTEXT_NUMERIC_FEATURES,
         cfeatures=CONTEXT_CATEGORICAL_FEATURES,
     )
-    context_model.fit(train_df[CONTEXT_FEATURES], y_train)
+    context_model.fit(full[CONTEXT_FEATURES], full[TARGET])
 
+    # ---- Audio model: librosa -> residual, on the downloaded set -------------
+    audio_df = load_librosa_training_set()
+    print(f"Audio: {len(audio_df)} librosa rows / {audio_df[GROUP_COLUMN].nunique()} artists")
+
+    # Leakage-free residual target: OOF context on the downloaded rows.
+    context_oof, _ = make_oof_predictions(
+        audio_df[CONTEXT_FEATURES], audio_df[TARGET], audio_df[GROUP_COLUMN],
+        best_params=context_params,
+        nfeatures=CONTEXT_NUMERIC_FEATURES, cfeatures=CONTEXT_CATEGORICAL_FEATURES,
+        n_splits=n_splits,
+    )
+    residual = pd.Series(audio_df[TARGET].to_numpy() - context_oof, index=audio_df.index)
+
+    # OOF evaluation of the audio model + a shuffled-feature noise floor
+    # (a permuted target the features provably cannot predict — tells us what a
+    # score of "no signal" looks like at this N).
+    audio_oof, _ = make_oof_predictions(
+        audio_df[AUDIO_FEATURES], residual, audio_df[GROUP_COLUMN],
+        best_params=audio_params,
+        nfeatures=AUDIO_NUMERIC_FEATURES, cfeatures=AUDIO_CATEGORICAL_FEATURES,
+        n_splits=n_splits,
+    )
+    shuffled_target = pd.Series(
+        residual.sample(frac=1.0, random_state=667).to_numpy(), index=residual.index
+    )
+    shuffled_oof, _ = make_oof_predictions(
+        audio_df[AUDIO_FEATURES], shuffled_target, audio_df[GROUP_COLUMN],
+        best_params=audio_params,
+        nfeatures=AUDIO_NUMERIC_FEATURES, cfeatures=AUDIO_CATEGORICAL_FEATURES,
+        n_splits=n_splits,
+    )
+    _report_audio_metrics(residual, audio_oof, shuffled_oof)
+
+    # Composed sanity check — dominated by fame, so NEVER quote it as audio evidence.
+    final_oof = np.clip(context_oof + audio_oof, 0, 100)
+    print(f"Final (context+audio) R2:    {r2_score(audio_df[TARGET], final_oof):.4f}  "
+          "(mostly fame — not an audio metric)")
+
+    # ---- Final audio model: fit on ALL downloaded rows -----------------------
     audio_model = build_LGBM(
         audio_params,
         nfeatures=AUDIO_NUMERIC_FEATURES,
         cfeatures=AUDIO_CATEGORICAL_FEATURES,
     )
-    audio_model.fit(train_df[AUDIO_FEATURES], train_df["popularity_residual"])
-
-    context_test_preds = context_model.predict(test_df[CONTEXT_FEATURES])
-    audio_adjustments = audio_model.predict(test_df[AUDIO_FEATURES])
-    final_preds = np.clip(context_test_preds + audio_adjustments, 0, 100)
-
-    test_residual = y_test - context_test_preds
-
-    print("Zero residual MAE:", mean_absolute_error(
-        test_residual,
-        np.zeros(len(test_residual)),
-    ))
-    print("Audio residual MAE:", mean_absolute_error(
-        test_residual,
-        audio_adjustments,
-    ))
-    print("Audio residual R2:", r2_score(
-        test_residual,
-        audio_adjustments,
-    ))
-    # NEW: the metric Model B is actually graded on. Rank-correlate the audio
-    # model's residual predictions against the true residual. CLAUDE.md floor is
-    # Spearman > 0.15 (minimum) / > 0.25 (good). This is the number to watch.
-    print("Audio residual Spearman:", spearmanr(test_residual, audio_adjustments)[0])
-
-    # NEW: shuffled-feature control = the noise floor. Retrain the SAME audio
-    # model on a permuted residual target, so the features have provably nothing
-    # to predict. With group splits + a finite test set, "no signal" is not
-    # exactly zero, so this tells us what zero looks like. Our real audio model
-    # only carries signal if it clearly BEATS these two numbers.
-    shuffled_residual = train_df["popularity_residual"].sample(
-        frac=1.0, random_state=667
-    ).to_numpy()
-    shuffled_audio_model = build_LGBM(
-        audio_params,
-        nfeatures=AUDIO_NUMERIC_FEATURES,
-        cfeatures=AUDIO_CATEGORICAL_FEATURES,
-    )
-    shuffled_audio_model.fit(train_df[AUDIO_FEATURES], shuffled_residual)
-    shuffled_adjustments = shuffled_audio_model.predict(test_df[AUDIO_FEATURES])
-    print("Shuffled-control residual R2:", r2_score(test_residual, shuffled_adjustments))
-    print("Shuffled-control residual Spearman:", spearmanr(test_residual, shuffled_adjustments)[0])
-
-    context_test_preds = np.clip(context_test_preds, 0, 100)
-
-    print("Context MAE:", mean_absolute_error(y_test, context_test_preds))
-    print("Context R2:", r2_score(y_test, context_test_preds))
-    print("Final MAE:", mean_absolute_error(y_test, final_preds))
-    print("Final R2:", r2_score(y_test, final_preds))
-
-    # NEW: run the audio-ceiling diagnostic on the SAME held-out artists so the
-    # numbers are comparable to the residual metrics above. See the function's
-    # docstring for how to read audio-alone R2 vs audio-residual R2.
-    evaluate_audio_ceiling(train_df, test_df, y_train, y_test, audio_params=audio_params)
+    audio_model.fit(audio_df[AUDIO_FEATURES], residual)
 
     artifact_dir = MODEL_DIR / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(context_model, artifact_dir / "context_model.joblib")
     joblib.dump(audio_model, artifact_dir / "audio_residual_model.joblib")
+    print(f"Saved context_model + audio_residual_model to {artifact_dir}")
 
     return context_model, audio_model
+
+
+if __name__ == "__main__":
+    train_residual_models()

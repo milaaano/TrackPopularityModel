@@ -24,14 +24,16 @@ The implemented plan was:
   - final train/test split uses `GroupShuffleSplit` by `primary_artist`
   - OOF context predictions use `GroupKFold` by `primary_artist`
 - Context model features:
-  - numeric: `artist_fame_loo`
+  - numeric: `artists_listeners` (Last.fm total listeners)
   - categorical: `track_genre`
-- Audio residual model features:
-  - numeric: `duration_ms`, `danceability`, `energy`, `loudness`, `speechiness`, `acousticness`, `instrumentalness`, `liveness`, `valence`, `tempo`
-  - categorical/music structure: `key`, `mode`, `time_signature`
-- Explicitly excluded from audio residual model:
-  - `artist_fame_loo`
-  - `track_genre`
+- Audio residual model features: the 25 librosa descriptors (`LIBROSA_FEATURES`),
+  extracted by `model/audio.py` — see CLAUDE.md Stage 6 (Option B).
+- Explicitly excluded from **every** model input:
+  - `artist_fame_loo` — a leave-one-out target encoding built *from popularity*
+    (corr **0.85** with the target, vs 0.41 for `artists_listeners`), and
+    uncomputable at serving time for a new upload. It survives only in
+    `notebooks/`, where it was used to clean the dataset.
+  - `track_genre` — context, not audio; it stays out of the audio model.
   - `explicit`
 - Save artifacts:
   - `model/artifacts/context_model.joblib`
@@ -45,7 +47,7 @@ Important functions/constants:
 
 - `DATA_PATH = data/processed/orig_data.parquet`
 - `GROUP_COLUMN = "primary_artist"`
-- `CONTEXT_FEATURES = ["artist_fame_loo", "track_genre"]`
+- `CONTEXT_FEATURES = ["artists_listeners", "track_genre"]`
 - `AUDIO_FEATURES` contains audio/song-structure features only.
 - `build_LGBM(best_params=None, nfeatures=None, cfeatures=None)` builds a sklearn pipeline:
   - numeric imputer + scaler
@@ -72,23 +74,26 @@ Run with:
 python3 test.py
 ```
 
-## Current Evaluation Results
+## Evaluation Results (SUPERSEDED — leaked)
 
-The user reported these results from the manual test:
+> **Do not quote these numbers.** They were produced with `artist_fame_loo` in the
+> context model, which is a leave-one-out target encoding (corr 0.85 with
+> popularity) — so the context R² of 0.76 is largely the target predicting itself.
+> With the leak removed (`artists_listeners` + `track_genre`), context R² is ≈0.62.
+> Kept only as the record of *why* the feature was dropped. Live numbers: CLAUDE.md §3.
 
 ```text
 Context MAE: 5.68129367695812
-Context R2: 0.7627087322961243
+Context R2: 0.7627087322961243     <- leak-inflated
 Final MAE: 5.655051655051774
 Final R2: 0.7629827845143948
 ```
 
-Interpretation:
+Interpretation (as far as it goes):
 
-- The audio residual model currently adds very little over the context model.
-- MAE improves by about `0.026`, which is small.
-- R2 improves by about `0.000274`, also very small.
-- This likely means the residual signal from current audio features is weak after `artist_fame_loo + track_genre` explain most predictable popularity.
+- The audio residual model added very little over the context model — but against a
+  leaked context, "how much audio adds" was not measurable in the first place.
+- The honest version of this comparison, on a clean context, is in CLAUDE.md §3.
 
 Additional residual diagnostics were added inside `train_residual_models`:
 
@@ -107,14 +112,20 @@ These should be checked on the next run. If `Audio residual MAE` is not meaningf
 - `model/__init__.py` currently comments out the predictor import but still has stale `__all__ = ["PopularityPredictor", "train_residual_models"]`.
 - If package imports become an issue, fix `model/__init__.py` to export only real symbols or leave it empty.
 - Earlier `train_context_model` stacking logic was replaced by `train_residual_models`; do not use the old stacked interpretation.
-- `artist_fame_loo` is a very strong feature and may be too close to the target, so it can absorb most explainable signal.
+- `artist_fame_loo` is **excluded from all model inputs** (resolved). It is a
+  leave-one-out target encoding derived from popularity itself (corr 0.85), and it
+  cannot be computed at serving time for a new upload. `artists_listeners` is the
+  fame feature everywhere; `artist_fame_loo` remains in `notebooks/` only, as the
+  data-cleaning tool it was built to be.
 - The current result does not prove audio has no real-world signal; it only says these Spotify-style tabular audio features add almost nothing in this setup.
 
 ## Suggested Next Steps
 
 - Rerun `python3 test.py` and inspect the residual diagnostics.
 - Add a baseline comparison for an audio model trained directly on popularity to verify whether audio has any raw signal before residualization.
-- Consider trying weaker/cleaner context features if `artist_fame_loo` is too target-derived.
+- ~~Consider weaker/cleaner context features~~ — **done**: `artist_fame_loo` was
+  replaced by `artists_listeners`, an external Last.fm signal (corr 0.41 with
+  popularity rather than 0.85).
 - Consider feature engineering or raw-audio features later; current Spotify-style features may not capture enough song quality signal.
 - Build a backend predictor only after the model interface is settled:
   - load `context_model.joblib`

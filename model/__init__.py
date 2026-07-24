@@ -1,3 +1,3 @@
-# from model.predictor import PopularityPredictor
+from model.predictor import SongPredictor, Prediction, PredictorError
 
-__all__ = ["PopularityPredictor", 'train_residual_models']
+__all__ = ["SongPredictor", "Prediction", "PredictorError"]

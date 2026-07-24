@@ -1,0 +1,54 @@
+# Pinned from the conda env the models were actually trained in:
+#   /opt/anaconda3/envs/ml/bin/python  (Python 3.14.4)
+#
+# WHY EVERYTHING IS PINNED WITH ==, NOT >=
+# The files in model/artifacts/ are *pickles*. Unpickling a scikit-learn estimator
+# under a different sklearn version raises InconsistentVersionWarning and is not
+# guaranteed to reconstruct the same object — it can load "successfully" and then
+# predict differently. A wrong-but-plausible score is the failure we can't see, so
+# the serving env must match the training env exactly. If you upgrade sklearn or
+# lightgbm, RETRAIN and regenerate the artifacts; do not just bump the pin.
+#
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+
+# --- core: required to load model/artifacts/ and serve a prediction ---
+scikit-learn==1.9.0     # MUST match the version that pickled the artifacts
+lightgbm==4.6.0         # the artifacts contain LGBMRegressor objects
+joblib==1.5.3
+# numpy/pandas/pyarrow are conda-built in the ml env, so `pip freeze` emits
+# unusable local file:// paths for them. Pinned by plain version instead.
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.17.1
+pyarrow==23.0.1         # parquet engine for data/processed/*.parquet
+
+# --- audio: Stage 5/6 feature extraction (model/audio.py) ---
+librosa==0.11.0
+soundfile==0.14.0
+audioread==3.1.0
+numba==0.65.1           # librosa's JIT backend; version-sensitive against numpy
+
+# --- data collection (notebooks/, download.ipynb) ---
+spotipy==2.26.0
+yt-dlp==2026.7.4
+requests==2.34.2
+python-dotenv==1.2.2
+
+# --- backend: Stage 7 serving layer (backend/app/main.py) ---
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+python-multipart==0.0.20  # required by FastAPI to parse the multipart upload
+# Stage 9's explanation calls a LOCAL Ollama over HTTP via `requests` (already
+# pinned above). There is no Python SDK dependency, and no key: if Ollama is not
+# running the explanation falls back to a deterministic template.
+
+# --- analysis / notebooks ---
+matplotlib==3.11.0
+seaborn==0.13.2
+ipykernel==7.3.0
+shap==0.52.0            # Stage 9: per-instance attribution for the LLM layer
+
+# --- dev ---
+pytest==9.1.1
+httpx2==2.7.0           # required by fastapi.testclient.TestClient (tests/test_backend.py)

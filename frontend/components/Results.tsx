@@ -173,14 +173,6 @@ export default function Results({ result }: { result: AnalyzeResult | null }) {
         </>
       )}
 
-      <div className="finebox">
-        Honest scale: “this recording” is what the song earns <em>beyond</em> its
-        artist&rsquo;s fame and its genre — typically only a few points, and ranked
-        against other {scope} tracks so the comparison is fair. A small number
-        isn&rsquo;t a weak analysis; it&rsquo;s the measured reality that fame and
-        genre dominate popularity.
-      </div>
-
       {audio_features && (
         <details className="raw">
           <summary>Feature details</summary>

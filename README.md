@@ -1,3 +1,13 @@
+---
+title: SoundSignal API
+emoji: 🎵
+colorFrom: purple
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # TrackPopularityModel
 
 ## Setup
@@ -66,3 +76,74 @@ downloaded set, and errors clearly if too few tracks are present.
 
 See `CLAUDE.md` for the modeling plan and the reasoning behind the two-model
 (fame vs. song) split.
+
+## Deployment
+
+The public application uses two services:
+
+- **Hugging Face Docker Space** for the FastAPI API, model artifacts, and audio
+  processing.
+- **Vercel** for the Next.js frontend in `frontend/`.
+
+### 1. Publish the API to a Docker Space
+
+Create a public Hugging Face Space with **Docker** as its SDK. This deployment
+branch can be pushed directly to the Space because its root `README.md`,
+`Dockerfile`, and `.dockerignore` already contain the required Space
+configuration:
+
+```bash
+git remote add space https://huggingface.co/spaces/<owner>/<space-name>
+git push space deployment:main
+```
+
+In the Space's **Settings**, add:
+
+- `LASTFM_API_KEY` as a **secret**.
+- `ALLOWED_ORIGINS` as a **variable** after Vercel provides the production URL.
+
+The API will be available at the Space's direct URL. Confirm it is running:
+
+```bash
+curl https://<owner>-<space-name>.hf.space/health
+```
+
+The expected response is `{"status":"ok"}`.
+
+### 2. Publish the frontend to Vercel
+
+Import the GitHub repository into Vercel and set:
+
+- **Production Branch:** `deployment`
+- **Root Directory:** `frontend`
+- **Framework Preset:** Next.js
+- **Environment Variable:**
+  `NEXT_PUBLIC_API_BASE_URL=https://<owner>-<space-name>.hf.space`
+
+Deploy the project. `NEXT_PUBLIC_API_BASE_URL` is compiled into the browser
+bundle, so redeploy the frontend whenever that value changes.
+
+### 3. Complete CORS configuration
+
+Copy the stable Vercel production origin into the Space variable:
+
+```text
+ALLOWED_ORIGINS=https://<project>.vercel.app
+```
+
+Additional exact origins, such as a custom domain, can be comma-separated:
+
+```text
+ALLOWED_ORIGINS=https://<project>.vercel.app,https://soundsignal.example.com
+```
+
+Changing a Space variable restarts the API. After it is running again, open the
+Vercel URL and test an actual audio upload. Vercel preview URLs are not allowed
+by the current exact-origin CORS policy; use the production URL for the hosted
+demo.
+
+### Security note
+
+Never commit the Last.fm API key. If a key was previously included in a
+notebook or another committed file, revoke it before publishing and create a
+replacement for the Space secret.

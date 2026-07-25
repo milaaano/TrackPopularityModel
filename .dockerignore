@@ -1,0 +1,27 @@
+.git
+.gitignore
+.pytest_cache
+.venv
+.env
+.env.*
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
+
+# These are development/training inputs, not runtime dependencies.
+data
+frontend
+models_tested
+notebooks
+tests
+*.ipynb
+*.pkl
+*.parquet
+*.csv
+
+# Local and generated artifacts.
+node_modules
+**/node_modules
+.next
+**/.next
+*.log

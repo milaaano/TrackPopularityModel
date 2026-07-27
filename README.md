@@ -47,6 +47,104 @@ pip install -r requirements.txt
 The backend imports `model.predictor.SongPredictor`, so whatever runs the API
 (uvicorn, a worker, a container) must be started from this environment too.
 
+## Run the application
+
+The application can be started directly with local commands or with Docker
+Compose. Both options expose the same URLs:
+
+- Application: http://localhost:3000
+- API health check: http://localhost:8000/health
+- Interactive API documentation: http://localhost:8000/docs
+
+The root `.env` supplies the backend configuration. Set `LASTFM_API_KEY` there
+to enable live artist lookups.
+
+### Option 1: Run with local commands
+
+Start the backend from the repository root:
+
+```bash
+mkdir -p /tmp/songassess-numba-cache
+
+NUMBA_CACHE_DIR=/tmp/songassess-numba-cache \
+/opt/anaconda3/envs/ml/bin/python -m uvicorn \
+backend.app.main:app --reload --port 8000
+```
+
+In a second terminal, start the frontend:
+
+```bash
+cd frontend
+npm install  # first run only
+npm run dev
+```
+
+Open http://localhost:3000. Keep both terminals running and press `Ctrl+C` in
+each one to stop the application.
+
+### Option 2: Run with Docker Compose
+
+The recommended shortcut starts Ollama, downloads the model configured by
+`OLLAMA_MODEL` when necessary, and launches the complete application. It prefers
+Docker Compose, but automatically falls back to the local Python and npm
+commands if Docker is missing, its engine cannot start, or Compose fails:
+
+```bash
+./scripts/start.sh
+```
+
+Press `Ctrl+C` to stop the application. The script also stops Ollama and Colima
+when it started those services itself. Services that were already running are
+left running.
+
+To start each component manually, first start Ollama and make sure the model
+exists:
+
+```bash
+ollama serve
+ollama pull deepseek-r1:7b  # first run only
+```
+
+First start a container engine. Either launch Docker Desktop:
+
+```bash
+open -a Docker
+until docker info >/dev/null 2>&1; do sleep 2; done
+```
+
+Or use Colima without Docker Desktop:
+
+```bash
+brew install colima  # first run only
+colima start --cpus 4 --memory 6
+```
+
+Then build and start both services from the repository root:
+
+```bash
+docker compose up --build
+```
+
+Compose builds the pinned Python backend, starts the Next.js development
+server, and waits for the API health check. The first build takes longer;
+subsequent starts can reuse the images:
+
+```bash
+docker compose up
+```
+
+Press `Ctrl+C` to stop the foreground process, then remove the containers:
+
+```bash
+docker compose down
+```
+
+If Colima was used, stop its VM when finished:
+
+```bash
+colima stop
+```
+
 ## Layout
 
 | Path | What it is |

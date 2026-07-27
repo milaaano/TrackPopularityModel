@@ -142,3 +142,11 @@ docker compose down
 | Application | http://localhost:3000 |
 | API health check | http://localhost:8000/health |
 | Interactive API documentation | http://localhost:8000/docs |
+
+## Project report
+
+## Project report
+
+![Report page 1](report/page-1.png)
+
+[Read the full PDF report](report/report.pdf).

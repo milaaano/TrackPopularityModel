@@ -145,8 +145,6 @@ docker compose down
 
 ## Project report
 
-## Project report
-
 ![Report page 1](report/page-1.png)
 
 [Read the full PDF report](report/report.pdf).

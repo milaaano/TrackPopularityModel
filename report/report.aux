@@ -35,25 +35,28 @@
 \newlabel{fig:ols}{{6}{5}{OLS on Spotify features. Train and test are nearly identical}{figure.caption.7}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Lasso under nested cross-validation --- statistically indistinguishable from OLS, indicating bias rather than variance is the bottleneck.}}{5}{figure.caption.8}\protected@file@percent }
 \newlabel{fig:lasso}{{7}{5}{Lasso under nested cross-validation --- statistically indistinguishable from OLS, indicating bias rather than variance is the bottleneck}{figure.caption.8}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}The four-term decomposition}{5}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Two-model residual architecture}{5}{subsection.6.3}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces MLP results. The jump over the linear models is evidence of a non-linear fame-to-popularity relationship.}}{5}{figure.caption.9}\protected@file@percent }
 \newlabel{fig:mlp}{{8}{5}{MLP results. The jump over the linear models is evidence of a non-linear fame-to-popularity relationship}{figure.caption.9}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Tree ensemble comparison under cross-validation and on a holdout set. The boosting methods and ExtraTrees cluster around $R^2 \approx 0.64$--$0.65$; the plain random forest trails at $0.5865$.}}{5}{figure.caption.10}\protected@file@percent }
 \newlabel{fig:trees}{{9}{5}{Tree ensemble comparison under cross-validation and on a holdout set. The boosting methods and ExtraTrees cluster around $R^2 \approx 0.64$--$0.65$; the plain random forest trails at $0.5865$}{figure.caption.10}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces LightGBM: best overall, and its feature importances show genre and artist listeners dominating every audio feature.}}{6}{figure.caption.11}\protected@file@percent }
 \newlabel{fig:lgbm}{{10}{6}{LightGBM: best overall, and its feature importances show genre and artist listeners dominating every audio feature}{figure.caption.11}{}}
+\newlabel{eq:residual_target}{{10}{6}{Two-model residual architecture}{equation.10}{}}
+\newlabel{eq:two_model_pipeline}{{11}{6}{Two-model residual architecture}{equation.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}The four-term decomposition}{6}{subsection.6.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Typical track.}{6}{section*.13}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Artist fame.}{6}{section*.14}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Genre.}{6}{section*.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Audio.}{6}{section*.16}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{The per-genre offset.}{6}{section*.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Out-of-fold estimation}{6}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Calibration}{6}{subsection.6.5}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Left: with fame \emph  {and} genre removed, librosa (0.128) and Spotify's engineered features (0.125) are near-identical, both far above the shuffled control (0.008). Right: residualising on fame alone leaves genre in the target and inflates the apparent audio signal roughly $3.5\times $.}}{7}{figure.caption.12}\protected@file@percent }
 \newlabel{fig:audio_genre}{{11}{7}{Left: with fame \emph {and} genre removed, librosa (0.128) and Spotify's engineered features (0.125) are near-identical, both far above the shuffled control (0.008). Right: residualising on fame alone leaves genre in the target and inflates the apparent audio signal roughly $3.5\times $}{figure.caption.12}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Composed pipeline. Audio improves every metric over fame and genre alone, by a small and consistent margin.}}{7}{figure.caption.18}\protected@file@percent }
-\newlabel{fig:overall}{{12}{7}{Composed pipeline. Audio improves every metric over fame and genre alone, by a small and consistent margin}{figure.caption.18}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Composed performance}{7}{subsection.6.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Explanation Layer}{7}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion and Limitations}{7}{section.8}\protected@file@percent }
-\gdef \@abspage@last{7}
+\@writefile{toc}{\contentsline {paragraph}{Audio.}{7}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{The per-genre offset.}{7}{section*.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Out-of-fold estimation}{7}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Calibration}{7}{subsection.6.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Composed performance}{7}{subsection.6.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Composed pipeline. Audio improves every metric over fame and genre alone, by a small and consistent margin.}}{8}{figure.caption.18}\protected@file@percent }
+\newlabel{fig:overall}{{12}{8}{Composed pipeline. Audio improves every metric over fame and genre alone, by a small and consistent margin}{figure.caption.18}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Explanation Layer}{8}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion and Limitations}{8}{section.8}\protected@file@percent }
+\gdef \@abspage@last{8}

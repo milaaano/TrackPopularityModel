@@ -394,6 +394,73 @@ and inflates the apparent audio signal roughly $3.5\times$.}
 \label{fig:audio_genre}
 \end{figure*}
 
+\subsection{Two-model residual architecture}
+
+The production pipeline is deliberately built from two models rather than one
+large regressor. A single model given fame, genre, and audio features could
+produce a strong popularity estimate, but every feature would compete to explain
+the same target. Its output would not reveal whether the prediction came from an
+artist's existing audience or from the recording. The two-model design instead
+assigns the two questions separate roles.
+
+The \textbf{context model} $f_c$ is a LightGBM regressor trained on all
+66{,}808 cleaned tracks. It receives the artist's Last.fm listener count $L$ and
+the track genre $g$, and predicts the popularity expected from those surrounding
+conditions:
+\begin{equation}
+\hat{y}_{\text{context}} = f_c(L,g).
+\end{equation}
+This is the appropriate starting point for the score. A new release by an
+established pop artist and an unsigned classical release do not begin with the
+same commercial expectation, regardless of their audio.
+
+The \textbf{audio model} $f_a$ is a second LightGBM regressor. It never receives
+the artist name, listener count, or genre as an input. Its inputs are the 58
+\texttt{librosa} descriptors $z$ extracted from the uploaded waveform, and its
+training target is the part of popularity left unexplained by the context model:
+\begin{equation}
+r_i = y_i - \hat{y}^{(-k)}_{c,i}.
+\label{eq:residual_target}
+\end{equation}
+Consequently, $f_a(z)$ is a
+signed adjustment of a song in a given context: positive when the recording contains patterns associated
+with performing above its contextual expectation, negative when it is associated
+with performing below it.
+
+Training proceeds sequentially. First, group-aware out-of-fold context
+predictions are generated for the downloaded-audio subset. These predictions
+are subtracted from the observed popularity to form the residual target in
+Equation~\ref{eq:residual_target}. The audio model is then trained to predict
+that residual from the waveform descriptors. The out-of-fold step is
+essential: residuals from a context model evaluated on its own training rows
+would be biased toward zero and would give the audio model an artificially
+easy, distorted target.
+
+At serving time the two branches run independently and their outputs are added:
+\begin{equation}
+\begin{aligned}
+(L,g) &\xrightarrow{\quad f_c\quad} \hat{y}_{\text{context}},\\
+\text{mp3} &\xrightarrow{\text{\texttt{librosa}}} z
+             \xrightarrow{\quad f_a\quad} \hat{y}_{\text{audio}},\\
+\hat{y} &= f_c(L,g) + f_a(z).
+\end{aligned}
+\label{eq:two_model_pipeline}
+\end{equation}
+The logic is therefore: \emph{given who released this track and the market in
+which it competes, what popularity should be expected; then, how does this
+particular recording move that expectation?} Keeping genre in the first branch
+is crucial. If it were left in the residual, the audio model could earn apparent
+accuracy simply by recognising genre, rather than by distinguishing recordings
+within that genre.
+
+This separation gives up some of the predictive freedom of an unconstrained
+blended model, but it makes the audio output defensible and actionable. It also
+explains the structure of the score shown to the user. The system still contains
+only two learned models: the next subsection algebraically divides the context
+output into the typical-track baseline, artist fame, and genre, then recentres
+the residual output to obtain the audio term. It does not train four independent
+predictors.
+
 \subsection{The four-term decomposition}
 
 Let $L$ denote an artist's listener count, $g$ a genre, $G$ the set of training

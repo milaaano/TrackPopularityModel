@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026) (preloaded format=xelatex 2026.7.27)  28 JUL 2026 12:21
+This is XeTeX, Version 3.141592653-2.6-0.999998 (TeX Live 2026) (preloaded format=xelatex 2026.7.27)  28 JUL 2026 12:41
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -455,30 +455,27 @@ File: figures/audio_genre_comparison.png Graphic file (type bmp)
 Underfull \vbox (badness 10000) has occurred while \output is active []
 
  [4]
-Underfull \vbox (badness 10000) has occurred while \output is active []
-
-
-Underfull \vbox (badness 10000) has occurred while \output is active []
+Underfull \vbox (badness 1194) has occurred while \output is active []
 
  [5]
 [6]
 File: figures/overall_performance.png Graphic file (type bmp)
 <figures/overall_performance.png>
- [7] (./report.aux)
+ [7] [8] (./report.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
 Package rerunfilecheck Info: File `report.out' has not changed.
-(rerunfilecheck)             Checksum: B99366F5B207B6C84EBFB91192F47065;3494.
+(rerunfilecheck)             Checksum: 7C0E19C6EC969297C48961DD464EDD16;3713.
  ) 
 Here is how much of TeX's memory you used:
- 11688 strings out of 468168
- 185742 string characters out of 5432815
- 618476 words of memory out of 5000000
- 40253 multiletter control sequences out of 15000+600000
+ 11692 strings out of 468168
+ 185843 string characters out of 5432815
+ 618820 words of memory out of 5000000
+ 40257 multiletter control sequences out of 15000+600000
  636114 words of font info for 91 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
- 72i,8n,79p,444b,462s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 72i,17n,79p,444b,462s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on report.xdv (7 pages, 211536 bytes).
+Output written on report.xdv (8 pages, 243216 bytes).

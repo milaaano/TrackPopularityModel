@@ -42,7 +42,7 @@ artist is already famous, because the genre is commercially favoured, or because
 of the recording itself. This project trains a gradient-boosted model on 66{,}808
 cleaned tracks and then \emph{decomposes} its prediction into four additive
 terms: a typical-track baseline, artist fame, genre, and the recording's own
-contribution. Along the way we document two instructive failures: a
+contribution. Along the way two instructive failures were documented: a
 leave-one-out artist-fame feature that silently leaked the target
 ($\rho = 0.85$ with popularity), and an evaluation setup in which forgetting to
 remove genre inflated the apparent audio signal roughly $3.5\times$
@@ -59,8 +59,8 @@ it is a standard regression problem, but a prediction alone is commercially
 uninteresting to the person who made the song: it does not separate what the
 artist's existing audience contributed from what the record contributed.
 
-This project therefore has two goals. The first is conventional --- fit the best
-model we can, measured properly. The second is the actual product: split the
+This project therefore has two goals. The first is conventional --- try fit the best
+model possible. The second is the actual product: split the
 predicted number into interpretable, additive parts, so that
 \begin{equation}
 \hat{y} \;=\; b \;+\; \Delta_{\text{fame}} \;+\; \Delta_{\text{genre}} \;+\; \Delta_{\text{audio}}
@@ -111,7 +111,7 @@ strong results that are largely the target predicting itself. It is also
 uncomputable at serving time, since a newly uploaded song has no catalogue of
 sibling tracks to average.
 
-We replaced it with an external signal: total listener counts per artist pulled
+It was decided to replaced it with an external signal: total listener counts per artist pulled
 from the Last.fm API. This feature has an honest weakness --- a large listener
 count is not the same thing as fame, since it accumulates over time and rewards
 longevity as much as current standing --- but no better public alternative was
@@ -190,8 +190,7 @@ $0.42$ for the external \texttt{artists\_listeners} replacement.}
 
 \section{Model Selection}
 
-We escalated model capacity deliberately, using each result to justify the next
-step rather than sweeping architectures at random.
+It was decided to try several models for both baseline estimation and understanding of structure of data.
 
 \subsection{Ordinary least squares}
 
@@ -203,7 +202,7 @@ OLS fits a linear map $\hat{y} = X\beta$ by minimising squared error,
 and serves as the baseline. Genre is nominal and must be one-hot encoded, which
 expands $X$ by 114 columns. Results are in Figure~\ref{fig:ols}: test
 $R^2 = 0.5983$, MAE $8.269$, RMSE $11.310$. Train and test scores are nearly
-identical ($R^2 = 0.6009$ vs $0.5983$), which already says something useful.
+identical ($R^2 = 0.6009$ vs $0.5983$).
 
 \subsection{Lasso}
 
@@ -224,8 +223,7 @@ MAE $8.277$, RMSE $11.233$.
 Lasso performs essentially identically to OLS ($0.5984$ vs $0.5983$), and OLS
 train and test scores barely differ. Regularisation changing nothing means
 variance is not the limiting factor. Combined with high absolute error, this is
-the signature of \textbf{high bias}: the hypothesis class is too simple for the
-data, and the fix is more capacity, not more regularisation.
+the signal of \textbf{high bias}. Hence the hypothesis class is: model is too simple to for the data, and hence a more complex model should be utilized.
 
 \subsection{Multilayer perceptron}
 
@@ -234,13 +232,13 @@ A neural network with one hidden layer computes
 h = \sigma(W_1 x + b_1), \qquad \hat{y} = W_2 h + b_2 ,
 \end{equation}
 where the non-linear activation $\sigma$ allows curved decision surfaces that no
-linear model can express. It improves markedly (Figure~\ref{fig:mlp}): test
+linear model can express. It improves notalby (Figure~\ref{fig:mlp}): test
 $R^2 = 0.6494$, MAE $7.285$, RMSE $10.540$. The gap between train $R^2 = 0.7284$
-and test $0.6494$ indicates mild overfitting, but the headline is that
-\textbf{non-linearity helps}. Given that \texttt{artists\_listeners} is the
+and test $0.6494$ indicates mild overfitting, but the the hypothesis is proven:
+\textbf{the data has non-linear relationship}. Given that \texttt{artists\_listeners} is the
 dominant numeric predictor, this implies the fame-to-popularity relationship is
-curved --- plausibly with saturating returns, where the difference between
-10{,}000 and 100{,}000 listeners matters far more than between 5M and 10M.
+curved. This makes a perfect sense, since the difference between
+10{,}000 and 1{,}000{,}010 listeners matters far more than between 5M and 6M.
 
 That conclusion is what motivates tree ensembles, which capture non-linearity
 and interactions natively and handle the mixed continuous/categorical feature
@@ -248,7 +246,8 @@ space without one-hot encoding.
 
 \subsection{Tree ensembles}
 
-We evaluated four ensembles (Figure~\ref{fig:trees}). \textbf{Random forests}
+
+Totally the performance of four ensembles (Figure~\ref{fig:trees}) was evaluated. \textbf{Random forests}
 average $B$ decorrelated trees grown on bootstrap samples,
 \begin{equation}
 \hat{y} = \frac{1}{B}\sum_{b=1}^{B} T_b(x) ,
@@ -278,8 +277,8 @@ reaching $R^2 = 0.7067$, MAE $6.537$ and Spearman $0.8411$
 
 Its feature importances make the central finding of the whole project explicit:
 \texttt{track\_genre} (1863) and \texttt{artists\_listeners} (1614) dominate,
-while every audio feature lands between 471 and 618. Context, not sound,
-explains most of Spotify popularity.
+while every audio feature lands between 471 and 618. The conclusion here is that the context rather than sound,
+explains most of popularity.
 
 \begin{figure}[t]
 \centering
@@ -330,14 +329,14 @@ obtain \texttt{danceability} or \texttt{valence} for it. Two options existed.
 \textbf{Option A} was to estimate Spotify's features from signal-level
 descriptors --- train a model per feature, then feed the estimates into the
 existing pipeline. Its appeal is interpretability, since the final explanation
-could keep using familiar names. We rejected it. Spotify's features are
+could keep using familiar names. It was decided to reject this idea. Spotify's features are
 themselves the output of proprietary models almost certainly more sophisticated
 than a linear or tree regressor; approximating them with a simpler model
 degrades the signal, and that degraded estimate is then consumed by a second
 model whose own error compounds it. The layer cannot add information that the
 signal-level descriptors did not already carry.
 
-\textbf{Option B}, which we adopted, is to retrain the audio model directly on
+\textbf{Option B}, which was adopted, is to retrain the audio model directly on
 \texttt{librosa} descriptors extracted from the waveform: tempo, onset rate, RMS
 energy and dynamic range, spectral centroid, bandwidth, rolloff, flatness and
 contrast, zero-crossing rate, MFCCs, and chroma statistics.
@@ -352,7 +351,7 @@ nothing.
 
 \subsection{Why Spearman}
 
-We report Spearman's rank correlation,
+Spearman's rank correlation was used
 \begin{equation}
 \rho \;=\; \operatorname{corr}\!\big(\operatorname{rank}(y), \operatorname{rank}(\hat{y})\big),
 \end{equation}
@@ -365,8 +364,7 @@ directly meaningful and is what the product actually presents.
 \subsection{The key insight: genre is audio}
 
 Audio features alone yield only about $0.13$ Spearman on the residual, and the
-LightGBM importances put genre and fame far ahead. The tempting conclusion ---
-that audio does not matter --- is wrong.
+LightGBM importances put genre and fame far ahead. At first it might seem that the audio does not matter -- but this is wrong assumption.
 
 Genre \emph{is} audio. A genre label is essentially a name attached to a region
 of audio-feature space: acousticness separates classical, energy and distortion

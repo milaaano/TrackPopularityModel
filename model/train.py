@@ -160,10 +160,6 @@ def make_oof_predictions(
     return oof_predictions, fold_models
 
 def load_librosa_training_set():
-    """The audio model's training data: downloaded tracks with
-    librosa descriptors, joined to the 66k dataset for popularity + fame + genre +
-    artist. Only tracks we have actually downloaded and extracted appear here. (The context model still trains on the 66k.)
-    """
     lib = pd.read_parquet(LIBROSA_CACHE)
     full = pd.read_parquet(DATA_PATH).drop_duplicates("spotify_track_id")
     df = lib.merge(full, on="spotify_track_id", how="inner")

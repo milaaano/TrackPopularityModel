@@ -1,30 +1,3 @@
-r"""Serving-side entry point: features in, scores out.
-
-This is the ONLY thing the backend should import. It owns the two artifacts
-train.py produces and the contract between them:
-
-    popularity  ≈  context_model(fame, genre)  +  audio_model(audio features)
-                   \_______ what fame buys ____/    \___ what the SONG adds ___/
-
-The audio model predicts the *residual* — the part of popularity that fame could
-not explain. That is the song's own contribution, and it is deliberately small
-(fame explains R²≈0.62, audio the leftovers). The SERVING audio model runs on
-**librosa descriptors** extracted from the uploaded mp3 (Stage 6 Option B), via the
-same model/audio.py extractor used in training, so there is no train/serve skew.
-(The Spotify-feature version — residual Spearman ≈0.18 on 66k — is the research
-track in notebooks/.) We report the audio part two ways (CLAUDE.md Stage 4):
-  - raw points ("audio added +4"), which compose with context into the final
-    popularity — intuitive, but +4 alone doesn't say whether +4 is good;
-  - a PERCENTILE against all songs' audio contributions ("beats 73%"), which is
-    what actually says whether +4 is good. The audio model was only ever graded
-    on ranking (Spearman), so a rank output is the honest headline.
-
-    from model.predictor import SongPredictor
-    predictor = SongPredictor()          # artifacts load once, lazily
-    result = predictor.predict_from_audio_file("song.mp3", context={...})
-    result.to_dict()                     # JSON-ready for the API layer
-"""
-
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -56,10 +29,6 @@ class PredictorError(ValueError):
 @dataclass
 class Prediction:
     # --- Audio model: this recording's own contribution ---
-    # `audio_contribution` is the WITHIN-GENRE deviation ("craft"): the raw model
-    # output minus that genre's mean output. The audio model's raw score is still
-    # mildly genre-correlated (see calibrate.py), so subtracting the genre offset
-    # keeps this number about the song rather than about its category.
     audio_percentile: float         # rank among songs OF THE SAME GENRE where possible
     audio_contribution: float       # popularity points, genre-centred ("craft added +2")
     audio_percentile_scope: str | None = None   # the genre it was ranked within, or "all genres"
@@ -70,32 +39,15 @@ class Prediction:
     predicted_popularity: float | None = None   # context + audio, clipped to [0, 100]
 
     # --- The three-part breakdown (Stage 8) ---------------------------------
-    # baseline + fame + genre + audio == predicted_popularity (before clipping).
-    # Derived from the context model directly rather than SHAP: `genre` is how much
-    # THIS genre differs from an average genre at this fame, and `fame` is how much
-    # this fame differs from a reference-fame track. Both are exact, no attribution
-    # library needed. None when no calibration artifact supplies the reference fame.
     baseline: float | None = None           # a median-fame track of an average genre
     fame_contribution: float | None = None  # what the artist's reach adds
     genre_contribution: float | None = None # what this style adds (incl. the audio genre offset)
 
-    # Whether the context half of the answer can be trusted. False => report the
-    # audio contribution alone; a popularity number without fame is not meaningful.
+    # Whether the context half of the answer can be trusted.
     context_available: bool = False
-    # True when the caller didn't know the genre. The context prediction is then
-    # MARGINALIZED — averaged over every genre the model was trained on — rather
-    # than filled with one "typical" genre. Why not the mode: this dataset is
-    # genre-balanced by construction, so the most-common genre is a near-tie won
-    # by luck, and genres differ by tens of popularity points at fixed fame
-    # (16–72 at 500k listeners). The average is the honest "I don't know".
-    # Contrast model/fame.py, where "artist not found" IS informative (evidence
-    # of obscurity) and the fill is deliberately LOW (p25). Stage 9 must phrase
-    # the context part accordingly ("averaged across genres").
     genre_imputed: bool = False
     warnings: list[str] = field(default_factory=list)
 
-    # Exactly the values that entered the models. Stage 9 (SHAP / LLM grounding)
-    # must explain THESE numbers, not the caller's raw payload.
     features: dict = field(default_factory=dict)
 
     def to_dict(self):
@@ -112,11 +64,9 @@ class SongPredictor:
         self._calibration = None
         self._known_genres = None
         self._mode_genre = None
-        self._baseline = None   # waterfall base; constant, so computed once
+        self._baseline = None
 
     # ------------------------------------------------------------------ loading
-    # Lazy + cached: a web worker imports this module at boot but should only pay
-    # the unpickle cost on the first real request.
     def _load(self):
         if self._audio_model is not None:
             return
@@ -133,19 +83,11 @@ class SongPredictor:
         self._audio_model = joblib.load(audio_path)
         self._context_model = joblib.load(context_path)
 
-        # The genres the context model's OneHotEncoder actually saw. An unseen
-        # genre does not raise (handle_unknown="ignore") — it silently encodes to
-        # an all-zero block, so we have to detect it ourselves to warn.
         categorical = self._context_model.named_steps["preprocessor"].named_transformers_[
             "categorical"
         ]
         self._known_genres = set(categorical.named_steps["encoder"].categories_[0])
 
-        # The training-mode genre, learned by the categorical SimpleImputer when
-        # the artifact was fit. NOT the unknown-genre fill (that path marginalizes
-        # over all genres — see _marginal_context_prediction for why the mode
-        # would be arbitrary here); kept as _frame's validation placeholder and
-        # for UI display.
         self._mode_genre = str(categorical.named_steps["imputer"].statistics_[0])
 
         calibration_path = self.artifact_dir / CALIBRATION_FILE
@@ -161,34 +103,21 @@ class SongPredictor:
 
     @property
     def mode_genre(self):
-        """Most-common training genre (informational; unknown-genre predictions
-        marginalize over all genres rather than filling this in)."""
         self._load()
         return self._mode_genre
 
     @property
     def context_model(self):
-        """The fitted context pipeline. Public so model/explain.py can wrap it in
-        a SHAP explainer without reaching into a private attribute."""
         self._load()
         return self._context_model
 
     @property
     def audio_model(self):
-        """The fitted audio pipeline (same rationale as context_model)."""
         self._load()
         return self._audio_model
 
     # ------------------------------------------------------------- input hygiene
     def _frame(self, values, columns, kind):
-        """One-row DataFrame with training dtypes. Raises on missing features.
-
-        We do NOT let a missing feature fall through to the pipeline's imputer.
-        The imputer exists for genuinely-missing values in the *training* data; at
-        serving time a missing danceability means upstream extraction broke, and
-        silently substituting the training median would return a confident score
-        for a song we never actually looked at.
-        """
         missing = [c for c in columns if values.get(c) is None]
         if missing:
             raise PredictorError(f"missing required {kind} features: {missing}")
@@ -220,20 +149,6 @@ class SongPredictor:
 
     # ------------------------------------------------------------- calibration
     def _to_percentile(self, residual, genre=None):
-        """Rank a raw audio score, preferring the song's OWN genre as the field.
-
-        Returns (percentile, scope). The calibration file stores 101 quantiles of
-        the audio model's OUT-OF-FOLD predictions (see calibrate.py) — out-of-fold
-        because in-sample predictions are over-spread, which would push every
-        uploaded song toward the extremes of the scale.
-
-        Why per genre: the same audio score means wildly different things by genre.
-        Measured on ~9k songs, the globally-median score lands anywhere from the
-        15th to the 78th percentile depending on the genre, so a global rank would
-        tell a classical artist they are terrible and a pop artist they are fine
-        for identical work. Genres with too few downloaded songs have no grid and
-        fall back to the global scale, flagged.
-        """
         if not self._calibration:
             return None, None
         per_genre = self._calibration.get("per_genre", {})
@@ -245,29 +160,11 @@ class SongPredictor:
         return float(np.searchsorted(grid, residual, side="right") / len(grid) * 100), scope
 
     def _genre_offset(self, genre):
-        """The audio model's mean output for this genre (0.0 if unknown/ungridded).
-
-        Subtracted from the raw score so `audio_contribution` is a within-genre
-        deviation; the offset itself is added to the genre bar, so the total is
-        unchanged and the waterfall identity still holds exactly.
-        """
         if not self._calibration or genre is None:
             return 0.0
         return float(self._calibration.get("genre_offset", {}).get(genre, 0.0))
 
     def _context_split(self, context_frame, context_pred):
-        """Split a context prediction into (baseline, fame part, genre part).
-
-        Exactly additive by construction:
-            baseline          = marginal context at a REFERENCE fame  (average genre)
-            fame              = marginal context at THIS fame - baseline
-            genre             = this genre's context - marginal at this fame
-            baseline + fame + genre == context_pred
-
-        "Marginal" means averaged over every training genre, so each term isolates
-        one variable. When the genre is unknown we marginalize anyway, and the genre
-        term falls out to ~0 on its own — no special case needed.
-        """
         reference_fame = (self._calibration or {}).get("reference_fame")
         if reference_fame is None:
             return None, None, None
@@ -281,35 +178,12 @@ class SongPredictor:
         return self._baseline, marginal_here - self._baseline, context_pred - marginal_here
 
     def _marginal_context_prediction(self, context_frame):
-        """Context prediction with genre integrated out: the mean prediction over
-        every genre the model was trained on, at the caller's fame level.
-
-        Used when the caller does not know the genre. Why not fill the mode:
-        this dataset is genre-balanced by construction, so "most common genre"
-        is a near-tie decided by luck of the split (it flipped comedy→bluegrass
-        between retrains), while genres differ by tens of popularity points at
-        fixed fame (16–72 points at 500k listeners). Betting the baseline on an
-        arbitrary tie-winner distorts the breakdown; averaging over all genres
-        is stable and represents genuine uncertainty instead of a fake specific
-        genre.
-        """
         genres = sorted(self._known_genres)
         frame = pd.concat([context_frame] * len(genres), ignore_index=True)
         frame["track_genre"] = genres
         return float(self._context_model.predict(frame).mean())
 
     def frames_for(self, audio_features, context=None):
-        """The validated (audio_frame, context_frame) that predict() would build.
-
-        Stage 9 needs the exact rows the models scored in order to attribute over
-        them. Rebuilding here — rather than duplicating _frame()'s dtype coercion,
-        range handling and missing-feature checks — keeps the explanation and the
-        prediction on identical inputs by construction.
-
-        `context_frame` is None when no context was supplied. When the genre is
-        unknown we insert the same placeholder predict() uses; the caller is
-        expected to marginalize over genres rather than trust that single row.
-        """
         self._load()
         audio_frame, _ = self._frame(dict(audio_features), AUDIO_FEATURES, "audio")
         if not context:
@@ -323,22 +197,6 @@ class SongPredictor:
 
     # ------------------------------------------------------------------ predict
     def predict(self, audio_features, context=None):
-        """Score one song.
-
-        audio_features: the 25 librosa descriptors (LIBROSA_FEATURES), as produced
-                        by model/audio.py::extract_librosa_features. For an mp3 use
-                        predict_from_audio_file(), which extracts them for you.
-        context:        {"artists_listeners": int, "track_genre": str | None} or
-                        None. track_genre may be None/omitted ("I don't know"):
-                        the context prediction is then AVERAGED over every
-                        training genre and flagged via Prediction.genre_imputed
-                        — an explicit, surfaced fallback, not the pipeline's
-                        silent imputer.
-
-        With no context we return the audio contribution only — that is the honest
-        answer for an unsigned artist, and it is the part the product is really
-        about. Passing fame in additionally yields the composed popularity estimate.
-        """
         self._load()
 
         audio_frame, warnings = self._frame(dict(audio_features), AUDIO_FEATURES, "audio")
@@ -351,20 +209,12 @@ class SongPredictor:
             warnings=warnings,
             features=audio_frame.iloc[0].to_dict(),
         )
-        # The genre we rank and centre against. Only a genre the caller actually
-        # supplied counts: an imputed one is a guess, and ranking a song inside a
-        # genre we invented for it would be worse than ranking it globally.
         scoring_genre = None
 
         if context:
             context_values = dict(context)
             marginalize_genre = context_values.get("track_genre") is None
             if marginalize_genre:
-                # "Genre unknown" is a legal input. The placeholder below exists
-                # only to satisfy _frame's strict missing-value check (which we
-                # keep — it guards against broken extraction upstream); the
-                # actual prediction averages over every training genre instead
-                # of using it.
                 context_values["track_genre"] = self._mode_genre
                 prediction.genre_imputed = True
 
@@ -373,8 +223,6 @@ class SongPredictor:
             )
             genre = context_frame.at[0, "track_genre"]
             if not marginalize_genre and genre not in self._known_genres:
-                # Not fatal, but the one-hot block is all zeros, so the context
-                # model is extrapolating off a genre it never saw. Say so.
                 context_warnings.append(
                     f"track_genre={genre!r} unseen in training; context estimate unreliable"
                 )
@@ -416,20 +264,11 @@ class SongPredictor:
                 )
 
         # --- genre-centre the audio score, then rank it -------------------------
-        # The raw score is mildly genre-correlated (calibrate.py measures mean audio
-        # output from ~-4.5 for romance to ~+1.6 for electro). Move that systematic
-        # part onto the genre bar so `audio_contribution` is what THIS recording did
-        # relative to its peers. The sum is untouched, so the waterfall still closes.
         offset = self._genre_offset(scoring_genre)
         prediction.audio_contribution = raw_audio - offset
         if prediction.genre_contribution is not None:
             prediction.genre_contribution += offset
         if prediction.context_contribution is not None:
-            # Mirror the same shift onto context_contribution. The offset moved
-            # from audio's raw score onto the genre bar, and genre is part of
-            # context, so context must carry it too — otherwise the legacy
-            # two-part identity (context + audio == predicted_popularity) breaks
-            # by exactly the offset.
             prediction.context_contribution = float(
                 np.clip(prediction.context_contribution + offset, POPULARITY_MIN, POPULARITY_MAX)
             )

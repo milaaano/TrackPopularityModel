@@ -1,37 +1,3 @@
-"""Resolve an artist name to a fame number (`artists_listeners`) for serving.
-
-This is Stage 7 step 2. The context model was trained on `artists_listeners`,
-which the enrichment pipeline defined as **Last.fm `artist.getInfo` →
-`stats.listeners`** (total Last.fm listeners), keyed by a specific name
-normalization. At serving time we MUST return the same quantity, resolved the
-same way, or the context model gets input off the distribution it learned and its
-popularity estimate is quietly wrong.
-
-Resolution order (CLAUDE.md Stage 7):
-  1. **Local DB** — the 16.7k artists we already enriched. Exact match on the
-     normalized name. Real value, `fame_estimated=False`.
-  2. **Last.fm API** — `artist.getInfo` with autocorrect. Real value,
-     `fame_estimated=False`. Requires LASTFM_API_KEY; skipped if unset or on any
-     network error (we never crash a prediction over a fame lookup).
-  3. **Low prior** — the 25th percentile of known artists' listeners, computed
-     once at build time. `fame_estimated=True`.
-
-Why the prior is LOW, not the median (this is the load-bearing choice):
-an artist in neither our DB nor Last.fm is, by that very fact, obscure — Last.fm's
-coverage is enormous, so "not found" is strong evidence of *small*, not average.
-The median (~50k) would tell an unknown bedroom artist "fame bought you a big
-chunk of popularity," which is fiction — and fiction in the fame half of the
-breakdown is exactly what the two-part decomposition exists to prevent. When we
-must guess, guessing low keeps the breakdown honest and lets the audio part carry
-the score.
-
-    from model.fame import FameResolver
-    fame = FameResolver()                       # reads LASTFM_API_KEY from env
-    r = fame.resolve("Radiohead")
-    context = {"artists_listeners": r.listeners, "track_genre": genre}
-    predictor.predict(audio_features, context=context)
-"""
-
 import json
 import os
 import re
@@ -46,13 +12,6 @@ DEFAULT_TIMEOUT_SECONDS = 8
 
 
 def normalize_artist_name(value) -> str:
-    """Normalize a name for lookup.
-
-    MUST stay identical to notebooks/artist_popularity_enrichment.ipynb — the DB
-    keys were built with that exact function, so any drift here turns real hits
-    into silent misses that fall through to the prior. (Duplicated rather than
-    imported because the source lives in a notebook; a shared home is a cleanup.)
-    """
     if value is None:
         return ""
     text = unicodedata.normalize("NFKC", str(value))
@@ -92,10 +51,6 @@ class FameResult:
 class FameResolver:
     def __init__(self, db_path=None, api_key=None, timeout=DEFAULT_TIMEOUT_SECONDS):
         self.db_path = Path(db_path) if db_path else ARTIFACT_DIR / FAME_DB_FILE
-        # Read the key from the env by default. We deliberately do NOT hardcode a
-        # fallback key (one is committed in the enrichment notebook — it should be
-        # rotated, not propagated). No key => the Last.fm step is skipped and
-        # unknown artists get the prior; the resolver still works.
         self.api_key = api_key or os.getenv("LASTFM_API_KEY")
         self.timeout = timeout
         self._db = None
@@ -195,8 +150,6 @@ def build_fame_db(source=None, out_path=None, prior_quantile=0.25):
     df = df.assign(listeners=listeners).dropna(subset=["listeners"])
 
     mapping = dict(zip(df["normalized_artist_name"], df["listeners"].astype(int)))
-    # Prior from the per-ARTIST distribution (one row per artist here), so it means
-    # "a typical obscure artist," not "a typical song row."
     prior = int(df["listeners"].quantile(prior_quantile))
 
     payload = {

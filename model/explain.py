@@ -1,17 +1,8 @@
-"""Stage 9: turn the numbers the two models produced into plain language.
-
-**No new predictions happen here.** SHAP does the attribution; the LLM only
-verbalizes numbers it is handed. That division is the whole safety property:
-`base + Σ shap == model output` is an exact identity we check per request, so
-every sentence traces to a number that reconciles. If it does not reconcile we
-refuse to call the LLM at all and fall back to a deterministic template.
-
+"""
 Two glossaries live here:
   - CONTEXT_LABELS  — fame / genre, the context model's two inputs.
   - AUDIO_CONCEPTS  — the 58 librosa descriptors folded into 12 things a human
-    can actually picture. Summing SHAP within a group is legitimate (SHAP is
-    additive), and it is the only honest way to talk about MFCCs: `mfcc7` has
-    no human meaning, so the 39 MFCC columns become one "overall timbre".
+    can actually picture.
 
     from model.explain import context_shap, audio_shap, generate_explanation
 """
@@ -27,13 +18,8 @@ import scipy.sparse as sp
 
 from model.features import LIBROSA_FEATURES
 
-# --- glossaries -------------------------------------------------------------
-
 CONTEXT_LABELS = {"artists_listeners": "fame", "track_genre": "genre"}
 
-# 58 librosa descriptors -> 12 readable concepts. Every raw column appears in
-# exactly one group (asserted below), so grouped SHAP still sums to the model
-# output and the reconciliation check keeps working.
 AUDIO_CONCEPTS = {
     "tempo": ["lb_tempo"],
     "note density": ["lb_onset_rate"],
@@ -176,7 +162,7 @@ def top_drivers(contributions, n=6):
 # --- explanation ------------------------------------------------------------
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:7b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi4-mini")
 # R1-style models generate a long reasoning trace before the answer; on CPU that
 # is slow. The frontend budgets 150s total for /analyze and librosa+SHAP take only
 # a few seconds, so 120 for the LLM leg stays inside that.
@@ -219,6 +205,8 @@ Hard rules:
 - Never name a data field ("caveats", "shap", "the output", …). You are writing
   for a musician who has never seen this data, only their song.
 - 3-5 sentences, plain language, no bullet points, no headings, no markdown.
+
+do not use markdown
 """
 
 # --- output validation ------------------------------------------------------
@@ -263,9 +251,6 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
 def _direction_contradiction(text, value, subject_words):
-    """True if a sentence mentioning `subject_words` uses direction language
-    opposite the actual sign of `value`. Sentence-scoped so an unrelated
-    sentence using "reduces" elsewhere (e.g. about craft) cannot trip it."""
     if value is None:
         return False
     positive = value >= 0
@@ -279,9 +264,7 @@ def _direction_contradiction(text, value, subject_words):
             return True
     return False
 
-# Our JSON schema narrated to a musician ("There are no caveats listed in the
-# output", "The Shap values for fame and genre..."). The bare word "caveat" is
-# normal English and is NOT banned — the tell is referring to it as a field.
+
 _META_REFERENCES = re.compile(
     r"\b("
     r"shap|payload|json|the output|the input"
@@ -305,15 +288,6 @@ _CAVEAT_LANGUAGE = re.compile(
 
 
 def _round_for_llm(value, digits=2):
-    """Round every float in the payload so the model *cannot* quote 15 decimals.
-
-    The model was faithfully echoing its input: json.dumps serializes raw floats
-    at full precision, so it received "76.05248677903587" and printed it back.
-    Rounding the input removes the source rather than asking the model to format
-    — the same reason `caveats` replaced the boolean flags.
-
-    Recursive: shap_context / shap_audio are nested dicts.
-    """
     if isinstance(value, float):
         return round(value, digits)
     if isinstance(value, dict):
@@ -323,29 +297,14 @@ def _round_for_llm(value, digits=2):
     return value
 
 
-# Fields the model must not see. `audio_standing` already states the percentile
-# AND whether it is good; handing over the bare number as well only gave the model
-# something to misjudge — it called the 24th percentile "above average".
 _LLM_HIDDEN = ("audio_percentile", "audio_percentile_scope")
 
 
 def _llm_view(payload):
-    """What the model is allowed to see: rounded, minus fields it would only
-    misinterpret. The validator still receives the FULL payload, so ground truth
-    is never lost — it is only withheld from the thing doing the guessing."""
     return _round_for_llm({k: v for k, v in payload.items() if k not in _LLM_HIDDEN})
 
 
 def _strip_reasoning(text):
-    """Reasoning models (deepseek-r1, …) emit a <think>...</think> block before
-    the answer, inside message.content. Keep only what follows the final close
-    tag — the reasoning trace must never reach the user OR the validator (it is
-    full of "above/below average" musings that would trip the direction checks).
-
-    An UNCLOSED <think> means the answer never arrived (truncated / timed out
-    mid-thought), so return "" and let the caller fall back to the template.
-    Harmless no-op for non-reasoning models: no tags, nothing stripped.
-    """
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[-1]
     return "" if "<think>" in text else text
@@ -360,25 +319,16 @@ def _validate_explanation(text, payload):
         match = _CAVEAT_LANGUAGE.search(text)
         if match:
             return False, f"invented caveat with none present: {match.group(0)!r}"
-    # The payload is rounded to 2dp before it is sent, so anything longer was
-    # not in the input — the model made it up or did arithmetic of its own.
     match = _LONG_DECIMAL.search(text)
     if match:
         return False, f"over-precise number: {match.group(0)!r}"
 
-    # Did it invert the standing? Truth comes from `audio_standing`, the same
-    # string the model was given, so both sides read one source.
-    # Asymmetric on purpose: a false positive costs a fallback to the template
-    # (harmless); a false negative tells the user the opposite of the truth.
     standing = (payload.get("audio_standing") or "").lower()
     if standing.startswith("below") and _ABOVE_AVERAGE.search(text):
         return False, "claims 'above average' but the track is below average"
     if standing.startswith("above") and _BELOW_AVERAGE.search(text):
         return False, "claims 'below average' but the track is above average"
 
-    # Same check, generalized: did the text invert genre's or fame's actual
-    # sign? (The observed bug — a positive genre_contribution narrated as a
-    # subtraction.) Ground truth is the raw contribution, not a re-parsed string.
     genre_words = {"genre", "style"}
     if payload.get("genre"):
         genre_words.add(str(payload["genre"]).lower())
@@ -396,16 +346,9 @@ def _validate_explanation(text, payload):
 
 
 def _template_explanation(payload):
-    """Deterministic fallback — used when Ollama is unreachable or SHAP fails.
-
-    Also the hosted-deploy path: a free Space cannot run a local LLM, so this is
-    what serves there. Same numbers, fixed phrasing.
-    """
     fame = payload["fame_contribution"]
     genre = payload["genre_contribution"]
     craft = payload["audio_contribution"]
-    # Same pre-computed string the model is given, so both paths state the
-    # standing identically and neither has to work out the direction itself.
     standing = payload.get("audio_standing")
 
     parts = [
@@ -427,8 +370,6 @@ def _template_explanation(payload):
             + " and ".join(f"{name} ({value:+.1f})" for name, value in top)
             + "."
         )
-    # Same source of truth the LLM gets: pre-written strings, present only when
-    # they actually apply. Nothing here can invent a limitation.
     parts.extend(payload.get("caveats") or [])
     parts.append(
         "Audio typically moves a score by only a few points; fame and genre "

@@ -1,13 +1,3 @@
-"""FastAPI serving layer: upload an mp3, get the breakdown back.
-
-Thin on purpose. All modelling lives in `model/` — this module only handles
-HTTP concerns (multipart parsing, file hygiene, CORS) and assembles the
-response. If you find yourself computing something here, it belongs in
-`model/predictor.py` or `model/explain.py` instead.
-
-    uvicorn backend.app.main:app --reload --port 8000
-"""
-
 import logging
 import os
 import shutil
@@ -55,10 +45,6 @@ _predictor = SongPredictor()
 _fame = FameResolver()
 
 if not _fame.api_key:
-    # Say this ONCE, loudly, at boot. Without a key the Last.fm step is skipped
-    # entirely and every artist outside the local DB gets the p25 low prior — a
-    # confident, plausible, wrong number. That used to surface only as a buried
-    # per-request note, which is exactly how it went unnoticed.
     log.warning(
         "LASTFM_API_KEY is not set — artist lookups will SKIP Last.fm and fall "
         "back to the low fame prior (p25) for anyone missing from the local DB. "
@@ -69,9 +55,6 @@ if not _fame.api_key:
 
 @app.get("/health")
 def health():
-    """Liveness probe. The frontend polls this on page load to wake a sleeping
-    host while the visitor is still reading, so it must stay cheap — no model
-    loading here."""
     return {"status": "ok"}
 
 
@@ -82,12 +65,6 @@ async def analyze(
     genre: str = Form(""),
     explicit: str = Form("false"),      # accepted for API compatibility; unused
 ):
-    """Score one uploaded track and explain the result.
-
-    `explicit` is accepted because the frontend sends it, but no current model
-    consumes it — the context model is fame+genre and the audio model is
-    librosa-only. Silently ignoring it beats pretending it matters.
-    """
     suffix = Path(audio_file.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(

@@ -74,7 +74,7 @@ OLLAMA_MODEL_NAME="$(
     }
   ' "$PROJECT_DIR/.env" | tail -n 1
 )"
-OLLAMA_MODEL_NAME="${OLLAMA_MODEL_NAME:-deepseek-r1:7b}"
+OLLAMA_MODEL_NAME="${OLLAMA_MODEL_NAME:-phi4-mini}"
 
 if ! curl --fail --silent --show-error --max-time 2 \
   http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
